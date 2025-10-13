@@ -228,38 +228,3 @@ if excel_file:
         except Exception:
             st.warning("Failed to prepare CSV export.")
 
-        # --- Optional: WhatsApp Cloud API send ---
-        send_via_cloud = st.checkbox("Send messages automatically via WhatsApp Business Cloud API", value=False)
-        if send_via_cloud:
-            wa_phone_id = os.getenv("WA_PHONE_NUMBER_ID")
-            wa_token = os.getenv("WA_ACCESS_TOKEN")
-            wa_api_base = os.getenv("WA_API_BASE", "https://graph.facebook.com/v15.0")
-            if not wa_phone_id or not wa_token:
-                st.error("Missing WA_PHONE_NUMBER_ID or WA_ACCESS_TOKEN in environment. Cannot send.")
-            else:
-                headers = {
-                    "Authorization": f"Bearer {wa_token}",
-                    "Content-Type": "application/json"
-                }
-                successes = 0
-                failures = []
-                for m in messages:
-                    phone = str(m['customer_number']).strip()
-                    payload = {
-                        "messaging_product": "whatsapp",
-                        "to": phone,
-                        "type": "text",
-                        "text": {"body": m['message']}
-                    }
-                    try:
-                        resp = requests.post(f"{wa_api_base}/{wa_phone_id}/messages", headers=headers, json=payload, timeout=10)
-                        if resp.status_code in (200,201):
-                            successes += 1
-                        else:
-                            failures.append({"phone": phone, "status_code": resp.status_code, "body": resp.text})
-                    except Exception as e:
-                        failures.append({"phone": phone, "error": str(e)})
-
-                st.success(f"Sent: {successes}; Failed: {len(failures)}")
-                if failures:
-                    st.json(failures)
