@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import requests
 import os
-import openai
 from dotenv import load_dotenv
 import logging
 import json
@@ -16,7 +15,6 @@ st.title("📱 WhatsApp Message Automation for MIS Report")
 # --- File upload and input controls ---
 excel_file = st.file_uploader("Upload Excel file with MIS and Message Format", type=["xlsx"])
 override_number = st.text_input("Specify test/customer number for all messages (optional)")
-
 
 if excel_file:
     xls = pd.ExcelFile(excel_file)
@@ -39,38 +37,37 @@ if excel_file:
     mis_df = pd.read_excel(xls, sheet_name=mis_sheet)
     msg_df = pd.read_excel(xls, sheet_name=msg_sheet)
 
-    # Let the user choose how many rows to process; set dynamic max based on sheet length
+    # --- Pagination control ---
     total_rows = len(mis_df)
-    process_all = st.checkbox("Process all rows", value=False)
-    if process_all:
-        num_rows = total_rows
-    else:
-        default_rows = 5 if total_rows >= 5 else total_rows
-        num_rows = st.number_input("Number of rows to process", min_value=1, max_value=total_rows, value=default_rows)
+    page_size = 10
+    total_pages = (total_rows + page_size - 1) // page_size  # ceiling division
 
-    st.write(f"### Preview of MIS Report (showing first {num_rows} rows):")
-    st.dataframe(mis_df.head(num_rows))
+    page_number = st.selectbox(
+        "Select Page (10 rows per page)",
+        options=list(range(1, total_pages + 1)),
+        format_func=lambda x: f"Page {x} ({(x-1)*page_size+1}–{min(x*page_size, total_rows)})"
+    )
+
+    start_idx = (page_number - 1) * page_size
+    end_idx = min(start_idx + page_size, total_rows)
+    page_df = mis_df.iloc[start_idx:end_idx]
+
+    st.write(f"### Showing rows {start_idx+1} to {end_idx} of {total_rows}:")
+    st.dataframe(page_df)
 
     st.write("### Preview of Message Content:")
     st.dataframe(msg_df)
 
-    if st.button("Generate Messages"):
-        logging.info("Starting message generation...")
+    if st.button(f"Generate Messages for Page {page_number}"):
+        logging.info(f"Starting message generation for page {page_number} (rows {start_idx+1}-{end_idx})")
         load_dotenv()
 
-        openai_api_key = os.getenv("OPENAI_API_KEY")
         api_base_url = os.getenv("API_BASE_URL")
         whatsapp_web_base_url = os.getenv("WHATSAPP_WEB_BASE_URL", "https://web.whatsapp.com/send")
-        openai_model = os.getenv("OPENAI_MODEL", "gpt-3.5-turbo")
 
         if not api_base_url:
             st.error("Missing environment variable: API_BASE_URL")
             st.stop()
-        if not openai_api_key:
-            st.error("Missing environment variable: OPENAI_API_KEY")
-            st.stop()
-
-        openai.api_key = openai_api_key
 
         # --- Template handling ---
         if 'Format' not in msg_df.columns:
@@ -79,7 +76,6 @@ if excel_file:
 
         default_prompt_template = str(msg_df['Format'].iloc[0])
         prompt_template = st.text_area("Edit or confirm message template:", default_prompt_template)
-        use_openai_rewrite = st.checkbox("Use OpenAI to rewrite messages (costly)", value=False)
 
         # --- Deterministic local rendering ---
         class SafeDict(dict):
@@ -97,25 +93,7 @@ if excel_file:
                     msg = msg.replace(f"{{{k}}}", v)
                 return msg
 
-        def rewrite_message_with_openai(message_text):
-            prompt = (
-                "Rewrite the following message into a short, friendly, professional tone. "
-                "Return only the rewritten message text without any extra commentary.\n\n"
-                f"MESSAGE:\n{message_text}\n"
-            )
-            try:
-                client = openai.OpenAI(api_key=openai_api_key)
-                response = client.chat.completions.create(
-                    model=openai_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300
-                )
-                return response.choices[0].message.content.strip()
-            except Exception as e:
-                logging.error(f"OpenAI rewrite error: {e}")
-                return message_text
-
-        # --- Deterministic API extractor: read only from api_data['data'] ---
+        # --- API data extractor ---
         def extract_from_api(api_data):
             out = {'loan_amount': None, 'property_address': None}
             if not isinstance(api_data, dict):
@@ -150,7 +128,7 @@ if excel_file:
         # --- Generate messages ---
         messages = []
 
-        for idx, row in mis_df.head(num_rows).iterrows():
+        for idx, row in page_df.iterrows():
             logging.info(f"Processing row {idx+1}")
             row_dict = row.to_dict()
 
@@ -176,16 +154,11 @@ if excel_file:
 
             api_vals = extract_from_api(api_data) if api_data else {}
 
-            # Merge according to rules: MIS preferred for customer fields; loan/property: MIS -> API['data']
+            # Merge: MIS preferred for customer fields; loan/property: MIS → API
             loan_amount_raw = row_dict.get('loan_amount') or row_dict.get('LOAN AMOUNT') or api_vals.get('loan_amount')
-            if isinstance(loan_amount_raw, (int, float)):
-                loan_amount = f"{int(loan_amount_raw):,}"
-            else:
-                loan_amount = str(loan_amount_raw) if loan_amount_raw is not None else 'N/A'
+            loan_amount = str(loan_amount_raw) if loan_amount_raw is not None else 'N/A'
 
             property_address = row_dict.get('property_address') or row_dict.get('PROPERTY ADDRESS') or api_vals.get('property_address') or 'N/A'
-
-            # Customer fields MUST come from MIS only
             customer_name = row_dict.get('customer_name') or row_dict.get('CUSTOMER NAME') or 'Customer'
             customer_contact = override_number or row_dict.get('customer_number') or row_dict.get('CUSTOMER CONTACT NO') or ''
 
@@ -199,49 +172,39 @@ if excel_file:
             }
 
             msg = render_message(prompt_template, values)
-            if use_openai_rewrite:
-                msg = rewrite_message_with_openai(msg)
 
-            # Normalize and clean the final message so fonts/rendering look consistent
+            # Clean message text
             def clean_message_text(text: str) -> str:
                 if text is None:
                     return ''
-                # Normalize Unicode to NFC
                 t = unicodedata.normalize('NFC', str(text))
-                # Replace common non-breaking spaces with regular spaces
                 t = t.replace('\u00A0', ' ')
-                # Replace smart quotes/dashes with ASCII equivalents for consistent rendering
                 replacements = {
                     '\u2018': "'", '\u2019': "'", '\u201C': '"', '\u201D': '"',
                     '\u2013': '-', '\u2014': '-', '\u2026': '...'
                 }
                 for k, v in replacements.items():
                     t = t.replace(k, v)
-                # Remove control characters except newline and tab
                 t = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]+", '', t)
-                # Collapse multiple spaces into one
                 t = re.sub(r' +', ' ', t)
-                # Trim
-                t = t.strip()
-                return t
+                return t.strip()
 
             msg = clean_message_text(msg)
 
             messages.append({"customer_number": customer_contact, "message": msg})
 
-        # Display results and provide send/export options
-        st.write("### Generated Messages:")
+        # --- Display results ---
+        st.write(f"### Generated Messages (Page {page_number}):")
         for i, m in enumerate(messages, start=1):
             st.write(f"{i}. **To:** {m['customer_number']}")
             st.write(m['message'])
-            phone = str(m['customer_number']).replace("+", "").strip()
-            # Properly URL-encode the message for the WhatsApp web link
+            phone = str(m['customer_number']).strip()
             text = quote_plus(m['message'])
             wa_url = f"{whatsapp_web_base_url}?phone={phone}&text={text}"
             st.markdown(f"[Open WhatsApp Web]({wa_url})", unsafe_allow_html=True)
             st.write("---")
 
-        # Export messages to CSV (useful for Selenium automation)
+        # --- Export to CSV ---
         try:
             from io import StringIO
             import csv
@@ -251,11 +214,16 @@ if excel_file:
             for m in messages:
                 writer.writerow([m["customer_number"], m["message"]])
             csv_data = buf.getvalue()
-            st.download_button("Download messages as CSV (for automation)", csv_data, file_name="messages.csv", mime="text/csv")
+            st.download_button(
+                "Download messages as CSV (for automation)",
+                csv_data,
+                file_name=f"messages_page_{page_number}.csv",
+                mime="text/csv"
+            )
         except Exception:
             st.warning("Failed to prepare CSV export.")
 
-        # Option: Send via WhatsApp Business Cloud API (requires env vars)
+        # --- Optional: WhatsApp Cloud API send ---
         send_via_cloud = st.checkbox("Send messages automatically via WhatsApp Business Cloud API", value=False)
         if send_via_cloud:
             wa_phone_id = os.getenv("WA_PHONE_NUMBER_ID")
@@ -271,7 +239,7 @@ if excel_file:
                 successes = 0
                 failures = []
                 for m in messages:
-                    phone = str(m['customer_number']).replace("+", "").strip()
+                    phone = str(m['customer_number']).strip()
                     payload = {
                         "messaging_product": "whatsapp",
                         "to": phone,
