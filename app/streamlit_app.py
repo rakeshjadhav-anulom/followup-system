@@ -15,7 +15,6 @@ st.title("📱 WhatsApp Message Automation for MIS Report")
 
 # --- File upload and input controls ---
 excel_file = st.file_uploader("Upload Excel file with MIS and Message Format", type=["xlsx"])
-num_rows = st.number_input("Number of rows to process", min_value=1, max_value=100, value=5)
 override_number = st.text_input("Specify test/customer number for all messages (optional)")
 
 
@@ -23,13 +22,33 @@ if excel_file:
     xls = pd.ExcelFile(excel_file)
     sheet_names = xls.sheet_names
 
-    mis_sheet = st.selectbox("Select MIS Report sheet", sheet_names)
-    msg_sheet = st.selectbox("Select WhatsApp Message Format sheet", sheet_names)
+    # Choose sensible defaults for sheet selection
+    def choose_default(sheet_options, preferred_names):
+        lower_map = {s.lower(): s for s in sheet_options}
+        for name in preferred_names:
+            if name.lower() in lower_map:
+                return lower_map[name.lower()]
+        return sheet_options[0]
+
+    mis_default = choose_default(sheet_names, ["MIS", "mis", "MIS Report", "Sheet1", "Sheet 1", "Sheet"])
+    msg_default = choose_default(sheet_names, ["Format", "Message", "Message Format", "Format"])
+
+    mis_sheet = st.selectbox("Select MIS Report sheet", sheet_names, index=sheet_names.index(mis_default))
+    msg_sheet = st.selectbox("Select WhatsApp Message Format sheet", sheet_names, index=sheet_names.index(msg_default))
 
     mis_df = pd.read_excel(xls, sheet_name=mis_sheet)
     msg_df = pd.read_excel(xls, sheet_name=msg_sheet)
 
-    st.write("### Preview of MIS Report:")
+    # Let the user choose how many rows to process; set dynamic max based on sheet length
+    total_rows = len(mis_df)
+    process_all = st.checkbox("Process all rows", value=False)
+    if process_all:
+        num_rows = total_rows
+    else:
+        default_rows = 5 if total_rows >= 5 else total_rows
+        num_rows = st.number_input("Number of rows to process", min_value=1, max_value=total_rows, value=default_rows)
+
+    st.write(f"### Preview of MIS Report (showing first {num_rows} rows):")
     st.dataframe(mis_df.head(num_rows))
 
     st.write("### Preview of Message Content:")
