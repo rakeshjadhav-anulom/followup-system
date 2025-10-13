@@ -34,8 +34,15 @@ if excel_file:
     mis_sheet = st.selectbox("Select MIS Report sheet", sheet_names, index=sheet_names.index(mis_default))
     msg_sheet = st.selectbox("Select WhatsApp Message Format sheet", sheet_names, index=sheet_names.index(msg_default))
 
-    mis_df = pd.read_excel(xls, sheet_name=mis_sheet)
+    # --- Load MIS and message format data ---
+    # Force all columns as strings to prevent comma formatting in phone numbers
+    mis_df = pd.read_excel(xls, sheet_name=mis_sheet, dtype=str)
     msg_df = pd.read_excel(xls, sheet_name=msg_sheet)
+
+    # Clean up number/contact-like columns
+    for col in mis_df.columns:
+        if any(key in col.lower() for key in ["number", "contact", "phone", "mobile", "id"]):
+            mis_df[col] = mis_df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
 
     # --- Pagination control ---
     total_rows = len(mis_df)
@@ -58,6 +65,7 @@ if excel_file:
     st.write("### Preview of Message Content:")
     st.dataframe(msg_df)
 
+    # --- Generate messages ---
     if st.button(f"Generate Messages for Page {page_number}"):
         logging.info(f"Starting message generation for page {page_number} (rows {start_idx+1}-{end_idx})")
         load_dotenv()
@@ -77,7 +85,7 @@ if excel_file:
         default_prompt_template = str(msg_df['Format'].iloc[0])
         prompt_template = st.text_area("Edit or confirm message template:", default_prompt_template)
 
-        # --- Deterministic local rendering ---
+        # --- Safe template rendering ---
         class SafeDict(dict):
             def __missing__(self, key):
                 return ''
@@ -101,12 +109,10 @@ if excel_file:
 
             data_section = api_data.get('data', {}) if isinstance(api_data, dict) else {}
 
-            # mortgagee.loan_amount
             mortgagee = data_section.get('mortgagee') if isinstance(data_section, dict) else None
             if isinstance(mortgagee, dict):
                 out['loan_amount'] = mortgagee.get('loan_amount')
 
-            # property list -> addresses
             prop = data_section.get('property') if isinstance(data_section, dict) else None
             prop_addrs = []
             if isinstance(prop, list) and len(prop) > 0:
@@ -154,7 +160,6 @@ if excel_file:
 
             api_vals = extract_from_api(api_data) if api_data else {}
 
-            # Merge: MIS preferred for customer fields; loan/property: MIS → API
             loan_amount_raw = row_dict.get('loan_amount') or row_dict.get('LOAN AMOUNT') or api_vals.get('loan_amount')
             loan_amount = str(loan_amount_raw) if loan_amount_raw is not None else 'N/A'
 
