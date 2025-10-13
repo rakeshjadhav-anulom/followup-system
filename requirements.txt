@@ -4,3 +4,4 @@ openpyxl
 requests
 openai
 python-dotenv
+webdriver-manager
