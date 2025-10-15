@@ -2,26 +2,32 @@ from playwright.sync_api import sync_playwright
 import time
 import os
 from dotenv import load_dotenv
-import json
 
-# Load environment variables from a .env file (optional)
+# Load environment variables
 load_dotenv()
 
 # --- Configuration from environment ---
-BASE_URL = os.getenv("BASE_URL", "https://icici-mortgage.anulom.com/draft/index")
-AUTH_KEY = os.getenv("AUTH_KEY", "")
+BASE_URL = os.getenv("BASE_URL", "")
 DOCUMENT_IDS_STR = os.getenv("DOCUMENT_IDS", "479169")  # Comma-separated string
 
 # Convert DOCUMENT_IDS_STR to list of ints
 DOCUMENT_IDS = [int(x.strip()) for x in DOCUMENT_IDS_STR.split(",") if x.strip().isdigit()]
 
+# Path to store persistent session data
+USER_DATA_DIR = os.getenv("USER_DATA_DIR", "playwright_session")  # folder to store login session
+
 def capture_snapshots():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)  # Set True for background mode
+        # Launch browser with persistent context to reuse login
+        browser = p.chromium.launch_persistent_context(
+            user_data_dir=USER_DATA_DIR,
+            headless=False  # False to see the browser, True for background
+        )
         page = browser.new_page()
 
         for doc_id in DOCUMENT_IDS:
-            url = f"{BASE_URL}?auth_key={AUTH_KEY}&document_id={doc_id}"
+            # Remove AUTH_KEY if using session
+            url = f"{BASE_URL}?document_id={doc_id}"
             print(f"Opening document {doc_id} at URL: {url}")
 
             try:
