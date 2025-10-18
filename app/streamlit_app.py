@@ -16,6 +16,11 @@ st.title("📱 WhatsApp Message Automation for MIS Report")
 excel_file = st.file_uploader("Upload Excel file with MIS and Message Format", type=["xlsx"])
 override_number = st.text_input("Specify test/customer number for all messages (optional)")
 
+# --- Snapshot inputs ---
+snapshot_location = st.text_input("Snapshot Location", value="c:\\snapshots")
+snapshot_prefix = st.text_input("Snapshot Prefix", value="snapshot_")
+snapshot_extension = st.text_input("Snapshot File Extension (include dot, e.g., .png)", value=".png")
+
 if excel_file:
     xls = pd.ExcelFile(excel_file)
     sheet_names = xls.sheet_names
@@ -35,11 +40,10 @@ if excel_file:
     msg_sheet = st.selectbox("Select WhatsApp Message Format sheet", sheet_names, index=sheet_names.index(msg_default))
 
     # --- Load MIS and message format data ---
-    # Force all columns as strings to prevent comma formatting in phone numbers
     mis_df = pd.read_excel(xls, sheet_name=mis_sheet, dtype=str)
     msg_df = pd.read_excel(xls, sheet_name=msg_sheet)
 
-    # Clean up number/contact-like columns
+    # Clean number/contact columns
     for col in mis_df.columns:
         if any(key in col.lower() for key in ["number", "contact", "phone", "mobile", "id"]):
             mis_df[col] = mis_df[col].astype(str).str.strip().replace("nan", "").replace("None", "")
@@ -47,7 +51,7 @@ if excel_file:
     # --- Pagination control ---
     total_rows = len(mis_df)
     page_size = 10
-    total_pages = (total_rows + page_size - 1) // page_size  # ceiling division
+    total_pages = (total_rows + page_size - 1) // page_size
 
     page_number = st.selectbox(
         "Select Page (10 rows per page)",
@@ -101,18 +105,15 @@ if excel_file:
                     msg = msg.replace(f"{{{k}}}", v)
                 return msg
 
-        # --- API data extractor ---
+        # --- API data extractor (optional) ---
         def extract_from_api(api_data):
             out = {'loan_amount': None, 'property_address': None}
             if not isinstance(api_data, dict):
                 return out
-
             data_section = api_data.get('data', {}) if isinstance(api_data, dict) else {}
-
             mortgagee = data_section.get('mortgagee') if isinstance(data_section, dict) else None
             if isinstance(mortgagee, dict):
                 out['loan_amount'] = mortgagee.get('loan_amount')
-
             prop = data_section.get('property') if isinstance(data_section, dict) else None
             prop_addrs = []
             if isinstance(prop, list) and len(prop) > 0:
@@ -121,14 +122,12 @@ if excel_file:
                         addr = p.get('address') or p.get('PROPERTY ADDRESS') or p.get('prop_address')
                         if addr:
                             prop_addrs.append(str(addr).strip())
-
             if len(prop_addrs) == 0:
                 out['property_address'] = None
             elif len(prop_addrs) == 1:
                 out['property_address'] = prop_addrs[0]
             else:
                 out['property_address'] = '; '.join([f"Property {i+1}: {a}" for i, a in enumerate(prop_addrs)])
-
             return out
 
         # --- Generate messages ---
@@ -145,7 +144,7 @@ if excel_file:
                 logging.warning(f"No customer number found for row {idx+1}, skipping.")
                 continue
 
-            # Fetch API data (if request_number present)
+            # Fetch API data if needed (optional)
             api_data = {}
             if request_number:
                 api_url = f"{api_base_url}?document_id={request_number}"
@@ -196,17 +195,35 @@ if excel_file:
 
             msg = clean_message_text(msg)
 
-            messages.append({"customer_number": customer_contact, "message": msg})
+            messages.append({
+                "customer_number": customer_contact,
+                "message": msg,
+                "request_number": request_number
+            })
 
         # --- Display results ---
         st.write(f"### Generated Messages (Page {page_number}):")
         for i, m in enumerate(messages, start=1):
             st.write(f"{i}. **To:** {m['customer_number']}")
             st.write(m['message'])
+
             phone = str(m['customer_number']).strip()
             text = quote_plus(m['message'])
             wa_url = f"{whatsapp_web_base_url}?phone={phone}&text={text}"
-            st.markdown(f"[Open WhatsApp Web]({wa_url})", unsafe_allow_html=True)
+
+            # Show request number inline before WhatsApp link
+            req_no = str(m.get("request_number", "")).strip()
+            if req_no:
+                st.markdown(f"**Request Number:** `{req_no}` | [Open WhatsApp Web]({wa_url})", unsafe_allow_html=True)
+                # Add snapshot path below the link with file extension
+                if snapshot_location and snapshot_prefix:
+                    ext = snapshot_extension.strip() or ""
+                    snapshot_path = os.path.join(snapshot_location, f"{snapshot_prefix}{req_no}{ext}")
+                    # Use st.text_input so user can copy with one click
+                    st.text_input("Snapshot Path", value=snapshot_path)
+            else:
+                st.markdown(f"[Open WhatsApp Web]({wa_url})", unsafe_allow_html=True)
+
             st.write("---")
 
         # --- Export to CSV ---
@@ -215,9 +232,9 @@ if excel_file:
             import csv
             buf = StringIO()
             writer = csv.writer(buf)
-            writer.writerow(["phone", "message"])
+            writer.writerow(["phone", "message", "request_number"])
             for m in messages:
-                writer.writerow([m["customer_number"], m["message"]])
+                writer.writerow([m["customer_number"], m["message"], m.get("request_number", "")])
             csv_data = buf.getvalue()
             st.download_button(
                 "Download messages as CSV (for automation)",
@@ -227,4 +244,3 @@ if excel_file:
             )
         except Exception:
             st.warning("Failed to prepare CSV export.")
-

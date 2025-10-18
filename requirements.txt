@@ -5,3 +5,5 @@ requests
 openai
 python-dotenv
 webdriver-manager
+pyautogui
+playwright
