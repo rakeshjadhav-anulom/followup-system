@@ -218,7 +218,7 @@ if excel_file:
                 # Add snapshot path below the link with file extension
                 if snapshot_location and snapshot_prefix:
                     ext = snapshot_extension.strip() or ""
-                    snapshot_path = os.path.join(snapshot_location, f"{snapshot_prefix}{req_no}{ext}")
+                    snapshot_path = os.path.normpath(os.path.join(snapshot_location, f"{snapshot_prefix}{req_no}{ext}"))
                     # Use st.text_input so user can copy with one click
                     st.text_input("Snapshot Path", value=snapshot_path)
             else:
