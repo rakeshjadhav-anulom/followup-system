@@ -1,4 +1,4 @@
 .env
 venv
 playwright*
-**/__pycache__/*
+app__pycache__/*
